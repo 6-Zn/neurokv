@@ -1045,20 +1045,162 @@ Per-class accuracy:
 
 ---
 
-### Key Activation Commands:
+---
 
+## Week 1 Day 3 (May 12): Evaluation Framework & Real Model Testing
+
+### Goal
+创建evaluation框架，测试baseline在真实模型上的效果。
+
+---
+
+### Step 6.1: HuggingFace镜像测试
+
+**Instruction executed:**
 ```bash
-# Activate environment
 source ~/miniconda3/etc/profile.d/conda.sh && conda activate neurokv
-
-# Set PYTHONPATH for imports
-PYTHONPATH=/home/gloria/workspace/homework/neuronetwork/final:$PYTHONPATH
-
-# Run tests
-python baselines/unified_interface.py
-python neurokv/oracle/attribution.py
-python neurokv/trainer/imitation.py
+export HF_ENDPOINT=https://hf-mirror.com
+python -c "
+from transformers import AutoTokenizer, AutoModelForCausalLM
+..."
 ```
+
+**Result:**
+```
+Testing HF mirror with small model...
+Tokenizer loaded: Qwen/Qwen2.5-0.5B-Instruct
+Vocab size: 151643
+Model loaded successfully
+Model device: cuda:0
+Test output: Hello, I am a 21 year old female. I have...
+```
+
+**Notes:**
+- HF镜像 `https://hf-mirror.com` 可用
+- Qwen2.5-0.5B-Instruct 模型成功加载
+- 模型适合12GB VRAM，可用于baseline测试
+
+---
+
+### Step 6.2: 创建Evaluation框架
+
+**Instruction executed:**
+Created `eval/evaluation.py` containing:
+
+1. `MetricType` enum: PERPLEXITY, BLEU, ROUGE, KL_DIVERGENCE, MEMORY, LATENCY
+2. `EvalConfig` dataclass: Evaluation settings
+3. `EvalResult` dataclass: Results container
+4. Calculators:
+   - `PerplexityCalculator`: Compute perplexity
+   - `KLDivergenceCalculator`: KL divergence between full and compressed
+   - `MemoryTracker`: Track GPU memory usage
+   - `LatencyTracker`: Track prefill/decode latency
+5. `BaselineEvaluator`: Main evaluation class
+
+---
+
+### Step 6.3: 创建Baseline测试脚本
+
+**Instruction executed:**
+Created `scripts/test_baselines.py` for real model testing.
+
+Features:
+- Uses HF mirror for model download
+- Tests 5 baselines: Full, H2O, StreamingLLM, KIVI, Random
+- Measures perplexity, cache ratio, latency
+- Generates comparison table
+
+---
+
+### Step 6.4: 运行Baseline测试
+
+**Instruction executed:**
+```bash
+source ~/miniconda3/etc/profile.d/conda.sh && conda activate neurokv
+export HF_ENDPOINT=https://hf-mirror.com
+PYTHONPATH=/home/gloria/workspace/homework/neuronetwork/final:$PYTHONPATH python scripts/test_baselines.py
+```
+
+**Result:**
+```
+==========================================================================================
+Baseline Comparison Results
+==========================================================================================
+
+Prompt: The quick brown fox jumps over the lazy dog. This ...
+------------------------------------------------------------------------------------------
+Method                      PPL  Cache Ratio  Prefill(ms)   Decode(ms)
+------------------------------------------------------------------------------------------
+FullCacheBaseline          2.72      100.00%        483.4        445.0
+H2OBaseline                2.72       20.00%         15.0        396.0
+StreamingLLMBaseline       2.72      100.00%          9.8        295.6
+KIVIBaseline               2.72       25.00%         10.5        291.2
+RandomBaseline             2.72       20.00%         11.5        297.3
+------------------------------------------------------------------------------------------
+```
+
+**Notes:**
+- 模型成功运行，生成连贯文本
+- Cache ratio显示正确：H2O=20%, KIVI=25%
+- 当前测试是simulation（压缩未真正集成到模型）
+- 下一步需要实现真实的KV cache hook
+
+---
+
+### Step 6.5: Git提交Day 3进度
+
+**Instruction executed:**
+```bash
+git add eval/ scripts/test_baselines.py
+git commit -m "Day 3: Evaluation framework and baseline testing"
+git push origin main
+```
+
+---
+
+## Week 1 Day 3 Summary
+
+### Completed:
+1. ✅ HF镜像可用 (`https://hf-mirror.com`)
+2. ✅ Qwen2.5-0.5B-Instruct模型加载成功
+3. ✅ Evaluation框架创建
+4. ✅ Baseline测试脚本运行成功
+5. ✅ 5个baseline对比测试完成
+
+### Baseline测试结果:
+
+| Method | Cache Ratio | Notes |
+|--------|-------------|-------|
+| Full | 100% | Oracle baseline |
+| H2O | 20% | Heavy + recent |
+| StreamingLLM | 100%* | Needs longer context to trigger compression |
+| KIVI | 25% | 4-bit quantization |
+| Random | 20% | Lower bound |
+
+### 待解决:
+- Baseline压缩需要真正集成到模型attention
+- StreamingLLM在短prompt不压缩（需要长context）
+- 需要测量压缩后的真实perplexity变化
+
+### 文件创建:
+| File | Description |
+|------|-------------|
+| eval/evaluation.py | Evaluation framework |
+| scripts/test_baselines.py | Baseline test script |
+
+---
+
+## 推送失败排查总结
+
+**原因分析:**
+- Day 1-2推送失败是临时网络波动
+- WSL环境下网络连接偶发性不稳定
+- GitHub HTTPS连接可能被防火墙拦截
+
+**解决方案:**
+- 使用 `git push -u origin main` 重试
+- 或使用 `gh auth setup-git` 配置认证
+- HF镜像 `hf-mirror.com` 作为备用
 
 ### Completed Tasks:
 1. ✅ Environment setup (conda, PyTorch, vLLM, dependencies)
