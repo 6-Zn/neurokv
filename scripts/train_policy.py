@@ -130,6 +130,8 @@ def main():
                         help='Output checkpoint path')
     parser.add_argument('--small', action='store_true',
                         help='Use small policy network (1M params)')
+    parser.add_argument('--weighted', action='store_true',
+                        help='Use weighted loss for class imbalance')
     args = parser.parse_args()
 
     print("=" * 60)
@@ -188,6 +190,7 @@ def main():
             num_llm_layers=num_llm_layers,
             feature_dim=features.shape[1],
             checkpoint_dir=os.path.dirname(args.output) or 'checkpoints',
+            use_weighted_loss=args.weighted,
         )
     else:
         config = TrainerConfig(
@@ -200,6 +203,7 @@ def main():
             num_llm_layers=num_llm_layers,
             feature_dim=features.shape[1],
             checkpoint_dir=os.path.dirname(args.output) or 'checkpoints',
+            use_weighted_loss=args.weighted,
         )
 
     print(f"\nTrainer config:")

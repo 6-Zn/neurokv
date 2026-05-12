@@ -1606,3 +1606,56 @@ Per-class accuracy:
 3. Evaluate trained policy on actual KV cache compression
 4. Compare NeuroKV policy vs baseline methods
 
+
+---
+
+### Step 6.4: Extended Training Analysis
+
+**Extended traces generated:**
+- 4 traces, 125MB JSON file
+- 236,160 training samples (6x larger)
+- Model: Qwen2.5-0.5B (24 layers, 14 heads)
+
+**Training with extended data:**
+```
+Without weighted loss:
+  Training: 88.44% accuracy
+  Validation: 54.75% accuracy
+  Per-class: EVICT 100%, KEEP 24.42%, COMPRESS 0.17%
+  
+With weighted loss:
+  Training: 86.57% accuracy
+  Validation: 55.83% accuracy
+  Similar pattern - EVICT dominates
+```
+
+**Key Finding:**
+COMPRESS_INT4 class is extremely difficult to predict. The model defaults to predicting EVICT for most cases. This suggests:
+
+1. Features don't distinguish COMPRESS from EVICT
+2. Oracle labels based on fixed ratios don't align well with attention features
+3. The "middle tier" concept (COMPRESS_INT4) lacks distinctive signal
+
+**Potential Solutions:**
+1. Add more features: token type, semantic embeddings
+2. Change oracle labeling: use continuous importance rather than tier-based
+3. Simplify to 2-class problem: KEEP vs EVICT
+4. Use RL to refine policy beyond imitation
+
+---
+
+### Files Modified:
+| File | Description |
+|------|-------------|
+| neurokv/trainer/imitation.py | Added weighted loss support |
+| scripts/train_policy.py | Added --weighted flag |
+| data/oracle_traces_extended.json | 125MB extended traces |
+
+### Commits:
+- 0285870: Day 6 initial training
+
+### Day 6 Final Status:
+✅ Training pipeline complete
+⚠️ COMPRESS_INT4 prediction issue identified
+→ Need to revisit oracle labeling or features
+

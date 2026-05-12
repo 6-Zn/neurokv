@@ -29,6 +29,8 @@ class TrainerConfig:
     batch_size: int = 256
     learning_rate: float = 1e-4
     weight_decay: float = 1e-5
+    use_weighted_loss: bool = False  # Use class weights for imbalanced data
+    class_weights: Optional[List[float]] = None  # Manual class weights
 
     # Policy network parameters
     num_layers: int = 2        # 2 for small, 4 for full
@@ -83,8 +85,17 @@ class ImitationTrainer:
             weight_decay=config.weight_decay,
         )
 
-        # Loss function
-        self.criterion = nn.CrossEntropyLoss()
+        # Loss function - with optional class weights
+        if config.use_weighted_loss:
+            if config.class_weights is not None:
+                weights = torch.tensor(config.class_weights, device=config.device)
+            else:
+                weights = None  # Will compute from data
+            self.criterion = nn.CrossEntropyLoss(weight=weights)
+            self.class_weights_tensor = weights
+        else:
+            self.criterion = nn.CrossEntropyLoss()
+            self.class_weights_tensor = None
 
         # Training state
         self.current_epoch = 0
@@ -95,6 +106,21 @@ class ImitationTrainer:
         # Metrics
         self.train_losses = []
         self.train_accuracies = []
+
+    def compute_class_weights(self, labels: torch.Tensor) -> torch.Tensor:
+        """Compute inverse-frequency class weights."""
+        counts = torch.bincount(labels, minlength=4)
+        # Avoid division by zero - but treat zero-count classes as weight 0
+        total = counts.sum()
+        weights = torch.zeros(4, dtype=torch.float)
+        for i in range(4):
+            if counts[i] > 0:
+                # Inverse frequency: weight = total / (num_classes * count)
+                # This balances each class to have equal contribution to loss
+                weights[i] = total / (counts[i])
+        # Normalize so average weight is 1
+        weights = weights / weights.mean()
+        return weights.to(self.config.device)
 
     def train(
         self,
@@ -139,6 +165,12 @@ class ImitationTrainer:
             shuffle=True,
             num_workers=0,
         )
+
+        # Compute class weights if needed
+        if self.config.use_weighted_loss and self.class_weights_tensor is None:
+            self.class_weights_tensor = self.compute_class_weights(labels)
+            self.criterion = nn.CrossEntropyLoss(weight=self.class_weights_tensor)
+            print(f"Computed class weights: {self.class_weights_tensor.tolist()}")
 
         # Training loop
         print(f"Starting training for {self.config.epochs} epochs...")
