@@ -20,6 +20,156 @@ from enum import Enum
 from abc import ABC, abstractmethod
 
 
+# ============================================================================
+# DynamicCache Compatibility Helpers (transformers 5.8+)
+# ============================================================================
+
+def get_cache_layers(cache) -> List:
+    """
+    Get list of cache layers from DynamicCache (transformers 5.8+) or tuple format.
+
+    Returns list of layer objects/tuples, or None if cache is empty/None.
+    """
+    if cache is None:
+        return None
+
+    # Transformers 5.8+ DynamicCache with layers attribute
+    if hasattr(cache, 'layers'):
+        return cache.layers
+
+    # Older tuple format: list of (key, value) tuples
+    if isinstance(cache, (list, tuple)):
+        return list(cache)
+
+    return None
+
+
+def get_layer_kv(layer) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Get keys and values from a cache layer.
+
+    Supports both DynamicLayer (transformers 5.8+) and tuple format.
+    """
+    if layer is None:
+        return None, None
+
+    # DynamicLayer (transformers 5.8+)
+    if hasattr(layer, 'keys') and hasattr(layer, 'values'):
+        return layer.keys, layer.values
+
+    # Tuple format (key, value)
+    if isinstance(layer, (tuple, list)) and len(layer) >= 2:
+        return layer[0], layer[1]
+
+    return None, None
+
+
+def set_layer_kv(layer, keys: torch.Tensor, values: torch.Tensor):
+    """
+    Set keys and values in a cache layer.
+
+    Supports both DynamicLayer (transformers 5.8+) and creates new tuple for older format.
+    """
+    if layer is None:
+        return (keys, values)
+
+    # DynamicLayer (transformers 5.8+)
+    if hasattr(layer, 'keys') and hasattr(layer, 'values'):
+        layer.keys = keys
+        layer.values = values
+        return layer
+
+    # Return new tuple for older format
+    return (keys, values)
+
+
+def get_cache_length(cache) -> int:
+    """
+    Get the sequence length of the KV cache.
+
+    Works with DynamicCache, tuple format, and older key_cache/value_cache format.
+    """
+    if cache is None:
+        return 0
+
+    # DynamicCache with get_seq_length method
+    if hasattr(cache, 'get_seq_length'):
+        try:
+            return cache.get_seq_length()
+        except:
+            pass
+
+    # DynamicCache with layers attribute (transformers 5.8+)
+    if hasattr(cache, 'layers') and len(cache.layers) > 0:
+        keys, _ = get_layer_kv(cache.layers[0])
+        if keys is not None:
+            return keys.shape[2]
+
+    # Older key_cache/value_cache format
+    if hasattr(cache, 'key_cache') and len(cache.key_cache) > 0:
+        return cache.key_cache[0].shape[2]
+
+    # Tuple format
+    if isinstance(cache, (list, tuple)) and len(cache) > 0:
+        keys, _ = get_layer_kv(cache[0])
+        if keys is not None:
+            return keys.shape[2]
+
+    return 0
+
+
+def compress_dynamic_cache(
+    cache,
+    baseline,
+    current_position: int = 0,
+    log: bool = False,
+) -> None:
+    """
+    Apply baseline compression to a DynamicCache (transformers 5.8+) or tuple cache.
+
+    Modifies the cache in-place for DynamicCache, returns new tuple for tuple format.
+
+    Args:
+        cache: DynamicCache or tuple of (key, value) per layer
+        baseline: KVCacheBaseline instance
+        current_position: Current generation position
+        log: Print compression details
+
+    Returns:
+        Modified cache (same object for DynamicCache, new tuple for tuple format)
+    """
+    if cache is None:
+        return None
+
+    layers = get_cache_layers(cache)
+    if layers is None or len(layers) == 0:
+        return cache
+
+    baseline.reset()
+
+    for layer_idx, layer in enumerate(layers):
+        keys, values = get_layer_kv(layer)
+        if keys is None or values is None:
+            continue
+
+        original_len = keys.shape[2]
+
+        # Apply baseline compression
+        compressed_keys, compressed_values = baseline.compress(
+            keys, values, None, current_position
+        )
+
+        new_len = compressed_keys.shape[2]
+
+        if log and new_len < original_len:
+            print(f"  Layer {layer_idx}: {original_len} -> {new_len} tokens ({new_len/original_len:.1%})")
+
+        # Update layer
+        set_layer_kv(layer, compressed_keys, compressed_values)
+
+    return cache
+
+
 class BaselineMethod(Enum):
     """Available baseline methods."""
     FULL_CACHE = "full"       # No compression (oracle)
@@ -178,18 +328,38 @@ class H2OBaseline(KVCacheBaseline):
         current_position: int = 0,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Apply H2O compression."""
-        batch, num_heads, new_len, head_dim = keys.shape
+        batch, num_heads, seq_len, head_dim = keys.shape
 
-        # Add new tokens to cache
+        # If this is the first call and we have the full prefill cache,
+        # compress it directly based on position (fallback to position-based importance)
         if self.keys is None:
+            # Check if seq_len is large enough to need compression
+            heavy_budget = int(self.heavy_ratio * seq_len)
+            recent_budget = int(self.recent_ratio * seq_len)
+
+            if seq_len > heavy_budget + recent_budget:
+                # Fallback: use uniform importance + position-based selection
+                # Keep: start tokens + recent tokens (similar to StreamingLLM fallback)
+                keep_indices = torch.cat([
+                    torch.arange(heavy_budget),  # "heavy" from start
+                    torch.arange(seq_len - recent_budget, seq_len)  # recent
+                ])
+                self.keys = keys[:, :, keep_indices, :]
+                self.values = values[:, :, keep_indices, :]
+                self.stats["heavy_tokens"] = heavy_budget
+                self.stats["recent_tokens"] = recent_budget
+                self.stats["tokens_kept"] = self.keys.shape[2]
+                return self.keys, self.values
+
+            # Store full cache
             self.keys = keys
             self.values = values
             if attention_weights is not None:
-                # Initialize accumulated scores
-                self.accumulated_scores = attention_weights.sum(dim=(1, 2))  # (batch, seq_len)
+                self.accumulated_scores = attention_weights.sum(dim=(1, 2))
+            self.stats["tokens_kept"] = seq_len
             return self.keys, self.values
 
-        # Concatenate new tokens
+        # Concatenate new tokens (decode phase)
         self.keys = torch.cat([self.keys, keys], dim=2)
         self.values = torch.cat([self.values, values], dim=2)
 
@@ -210,20 +380,23 @@ class H2OBaseline(KVCacheBaseline):
 
         # Select tokens
         if self.accumulated_scores is not None:
-            # Get heavy hitters (excluding recent tokens)
             old_scores = self.accumulated_scores[:, :-recent_budget]
             _, topk_indices = old_scores.topk(heavy_budget, dim=-1)
-
-            # Combine heavy + recent
             recent_indices = torch.arange(seq_len - recent_budget, seq_len)
-
-            # Gather selected tokens
             keep_indices = torch.cat([topk_indices.squeeze(0), recent_indices])
-
             self.keys = self.keys[:, :, keep_indices, :]
             self.values = self.values[:, :, keep_indices, :]
             self.accumulated_scores = self.accumulated_scores[:, keep_indices]
-
+            self.stats["heavy_tokens"] = heavy_budget
+            self.stats["recent_tokens"] = recent_budget
+        else:
+            # Fallback: position-based selection
+            keep_indices = torch.cat([
+                torch.arange(heavy_budget),
+                torch.arange(seq_len - recent_budget, seq_len)
+            ])
+            self.keys = self.keys[:, :, keep_indices, :]
+            self.values = self.values[:, :, keep_indices, :]
             self.stats["heavy_tokens"] = heavy_budget
             self.stats["recent_tokens"] = recent_budget
 

@@ -1254,3 +1254,146 @@ git push origin main
 - Unified baseline interface
 - Oracle attribution pipeline
 - Imitation learning training
+---
+
+## Week 2 Day 5 (May 14): DynamicCache API Fix & Real Compression Integration
+
+### Goal
+解决transformers 5.8 DynamicCache API变化问题，实现真正的KV cache压缩集成。
+
+---
+
+### Step 8.1: DynamicCache API Investigation
+
+**Problem:** transformers 5.8 changed DynamicCache structure:
+- Old API: `cache.key_cache[i]`, `cache.value_cache[i]`
+- New API: `cache.layers[i].keys`, `cache.layers[i].values`
+
+**Investigation executed:**
+```python
+from transformers import DynamicCache
+cache = DynamicCache()
+# Check attributes
+# Found: cache.layers is list of DynamicLayer objects
+# Each layer has .keys and .values attributes
+```
+
+**Result:**
+```
+layers: list
+Layer 0 type: DynamicLayer
+layer0.keys shape: torch.Size([1, 8, 100, 128])
+layer0.values shape: torch.Size([1, 8, 100, 128])
+```
+
+**Solution:** Created compatibility helpers in unified_interface.py:
+- `get_cache_layers(cache)` - Get list of layers from DynamicCache or tuple
+- `get_layer_kv(layer)` - Get keys/values from a layer
+- `set_layer_kv(layer, keys, values)` - Set keys/values in a layer
+- `get_cache_length(cache)` - Get sequence length from cache
+- `compress_dynamic_cache(cache, baseline, ...)` - Apply compression to DynamicCache
+
+---
+
+### Step 8.2: Update Baseline Interface
+
+**Modified:** `baselines/unified_interface.py`
+
+**Added compatibility functions:**
+```python
+def get_cache_layers(cache) -> List:
+    # Transformers 5.8+ DynamicCache with layers attribute
+    if hasattr(cache, 'layers'):
+        return cache.layers
+    # Older tuple format
+    if isinstance(cache, (list, tuple)):
+        return list(cache)
+    return None
+
+def compress_dynamic_cache(cache, baseline, current_position=0, log=False):
+    layers = get_cache_layers(cache)
+    for layer_idx, layer in enumerate(layers):
+        keys, values = get_layer_kv(layer)
+        ck, cv = baseline.compress(keys, values, None, current_position)
+        set_layer_kv(layer, ck, cv)
+```
+
+**Modified:** H2O baseline to support one-shot compression without attention weights
+
+---
+
+### Step 8.3: Update Test Scripts
+
+**Modified:** 
+- `scripts/test_direct_compress.py` - Use new compatibility helpers
+- `scripts/test_long_context.py` - Use new compatibility helpers
+
+---
+
+### Step 8.4: Test Results
+
+**Test executed:**
+```bash
+python scripts/test_direct_compress.py
+```
+
+**Result:**
+```
+StreamingLLM:
+  Original cache length: 2153
+  Layer 0: 2153 -> 68 tokens (3.2%)
+  ...
+  Final cache length: 68
+  Compression ratio: 3.16%
+```
+
+**Long context test:**
+```bash
+python scripts/test_long_context.py
+```
+
+**Result:**
+```
+Method             Input   Output    Cache      Ratio     Time(ms)        PPL
+Full Cache           411       30      441    100.00%       1136.2       1.51
+H2O                  411       30      112     25.40%        506.6       2.51
+StreamingLLM         411       30       98     22.22%        357.7       1.81
+KIVI                 411       30      441    100.00%        667.6       1.54
+Full Cache           807       30      837    100.00%        417.5       1.23
+H2O                  807       30      190     22.70%        416.1       1.23
+StreamingLLM         807       30       98     11.71%        349.4       1.23
+```
+
+**Key findings:**
+1. StreamingLLM: Consistent 68 tokens (4 sink + 64 recent), works for any input length
+2. H2O: Proportional compression (~20%), heavy+recent strategy
+3. KIVI: No token reduction (quantization only), 4-bit storage
+4. Full Cache: Good quality output, baseline for comparison
+
+---
+
+### Week 2 Day 5 Summary
+
+### Completed:
+1. ✅ DynamicCache API investigation (transformers 5.8)
+2. ✅ Compatibility helpers created
+3. ✅ Real KV cache compression working
+4. ✅ Long context test with actual generation
+5. ✅ H2O fixed to support one-shot compression
+
+### Compression Results:
+| Method | Input 411 | Input 807 | Ratio |
+|--------|-----------|-----------|-------|
+| StreamingLLM | 68 | 68 | Fixed size |
+| H2O | 82-102 | 160-200 | ~20% |
+| KIVI | 411 | 807 | 100% (quantize only) |
+
+### Files Modified:
+- `baselines/unified_interface.py` - Added compatibility helpers
+- `scripts/test_direct_compress.py` - Updated for transformers 5.8
+- `scripts/test_long_context.py` - Updated for transformers 5.8
+
+### Next Steps:
+- Week 3: Oracle attribution & imitation learning integration
+- Week 4: RL training loop
+- Week 5-6: Full evaluation & comparison

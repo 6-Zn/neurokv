@@ -16,10 +16,15 @@ from baselines.unified_interface import (
     BaselineMethod,
     CacheConfig,
     create_baseline,
+    get_cache_layers,
+    get_layer_kv,
+    set_layer_kv,
+    get_cache_length,
+    compress_dynamic_cache,
 )
 
 print("=" * 60)
-print("Direct Compression Test")
+print("Direct Compression Test (transformers 5.8+ Compatible)")
 print("=" * 60)
 
 # Load model
@@ -52,16 +57,18 @@ with torch.no_grad():
     outputs = model(input_ids, use_cache=True)
     past_key_values = outputs.past_key_values
 
-# Check cache structure
-print(f"Past key values type: {type(past_key_values)}")
-print(f"Has key_cache: {hasattr(past_key_values, 'key_cache')}")
-if hasattr(past_key_values, 'key_cache'):
-    print(f"Number of layers: {len(past_key_values.key_cache)}")
-    print(f"Key cache[0] shape: {past_key_values.key_cache[0].shape}")
-    cache_len = past_key_values.key_cache[0].shape[2]
-else:
-    print("DynamicCache has no key_cache attribute!")
-    cache_len = 0
+# Check cache structure using compatibility helpers
+print(f"Past key values type: {type(past_key_values).__name__}")
+cache_len = get_cache_length(past_key_values)
+print(f"Cache length: {cache_len} tokens")
+
+layers = get_cache_layers(past_key_values)
+print(f"Number of layers: {len(layers) if layers else 0}")
+
+if layers and len(layers) > 0:
+    k0, v0 = get_layer_kv(layers[0])
+    if k0 is not None:
+        print(f"Layer 0 keys shape: {k0.shape}")
 
 # Test compression
 print("\n" + "=" * 60)
@@ -83,33 +90,19 @@ baselines = {
 for name, config in baselines.items():
     print(f"\n{name}:")
     baseline = create_baseline(config)
-    baseline.reset()
 
-    # Get first layer's KV
-    # DynamicCache uses different API
-    k = past_key_values.key_cache[0]
-    v = past_key_values.value_cache[0]
+    # Get original length
+    original_len = get_cache_length(past_key_values)
+    print(f"  Original cache length: {original_len}")
 
-    original_len = k.shape[2]
-    print(f"  Original: {k.shape}")
+    # Compress using compatibility function
+    compress_dynamic_cache(past_key_values, baseline, original_len - 1, log=True)
 
-    # Compress
-    ck, cv = baseline.compress(k, v, None, original_len - 1)
-    print(f"  Compressed: {ck.shape}")
-    print(f"  Ratio: {ck.shape[2] / original_len:.2%}")
+    # Get new length
+    new_len = get_cache_length(past_key_values)
+    print(f"  Final cache length: {new_len}")
+    print(f"  Compression ratio: {new_len / original_len:.2%}")
     print(f"  Stats: {baseline.get_stats()}")
-
-    # Apply to all layers
-    print("  Applying to all layers...")
-    for layer_idx in range(len(past_key_values.key_cache)):
-        k = past_key_values.key_cache[layer_idx]
-        v = past_key_values.value_cache[layer_idx]
-        ck, cv = baseline.compress(k, v, None, original_len - 1)
-        print(f"    Layer {layer_idx}: {k.shape[2]} -> {ck.shape[2]}")
-        past_key_values.key_cache[layer_idx] = ck
-        past_key_values.value_cache[layer_idx] = cv
-
-    print(f"  Final cache size: {past_key_values.key_cache[0].shape[2]}")
 
 print("\n" + "=" * 60)
 print("Test Complete!")

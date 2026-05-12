@@ -23,6 +23,11 @@ from baselines.unified_interface import (
     BaselineMethod,
     CacheConfig,
     create_baseline,
+    get_cache_layers,
+    get_layer_kv,
+    set_layer_kv,
+    get_cache_length,
+    compress_dynamic_cache,
 )
 
 
@@ -149,43 +154,16 @@ def test_with_compression(
         outputs = model(generated_ids, use_cache=True)
         past_key_values = outputs.past_key_values
 
-        # Get initial cache length
-        if hasattr(past_key_values, 'get_seq_length'):
-            initial_cache_len = past_key_values.get_seq_length()
-        elif hasattr(past_key_values, 'key_cache'):
-            initial_cache_len = past_key_values.key_cache[0].shape[2]
-        else:
-            initial_cache_len = generated_ids.shape[1]
+        # Get initial cache length using compatibility helper
+        initial_cache_len = get_cache_length(past_key_values)
 
         # Apply initial compression (prefill compression)
         if initial_cache_len > compress_threshold:
             print(f"  Prefill compression: {initial_cache_len} tokens (threshold={compress_threshold})")
-            if hasattr(past_key_values, 'key_cache'):
-                new_key_cache = []
-                new_value_cache = []
-                for layer_idx in range(len(past_key_values.key_cache)):
-                    k = past_key_values.key_cache[layer_idx]
-                    v = past_key_values.value_cache[layer_idx]
-                    try:
-                        ck, cv = baseline.compress(k, v, None, initial_cache_len - 1)
-                        print(f"    Layer {layer_idx}: {k.shape[2]} -> {ck.shape[2]} tokens")
-                        if ck.shape[2] < k.shape[2]:
-                            new_key_cache.append(ck)
-                            new_value_cache.append(cv)
-                            compressions_applied += 1
-                        else:
-                            # No compression, keep original
-                            print(f"    Layer {layer_idx}: no compression (returned same size)")
-                            new_key_cache.append(k)
-                            new_value_cache.append(v)
-                    except Exception as e:
-                        print(f"    Layer {layer_idx} failed: {e}")
-                        new_key_cache.append(k)
-                        new_value_cache.append(v)
-                past_key_values.key_cache = new_key_cache
-                past_key_values.value_cache = new_value_cache
-                new_len = new_key_cache[0].shape[2]
-                print(f"    Final cache: {new_len} tokens ({new_len/initial_cache_len:.1%})")
+            compress_dynamic_cache(past_key_values, baseline, initial_cache_len - 1, log=True)
+            new_len = get_cache_length(past_key_values)
+            print(f"    Final cache: {new_len} tokens ({new_len/initial_cache_len:.1%})")
+            compressions_applied += 1
 
         # Decode phase
         for step in range(max_new_tokens):
@@ -197,72 +175,21 @@ def test_with_compression(
 
             past_key_values = outputs.past_key_values
 
-            # Handle DynamicCache vs tuple
-            if hasattr(past_key_values, 'get_seq_length'):
-                # DynamicCache (newer transformers)
-                cache_len = past_key_values.get_seq_length()
-            elif past_key_values is not None:
-                # Tuple format (older transformers)
-                cache_len = past_key_values[0][0].shape[2]
-            else:
-                cache_len = generated_ids.shape[1]
+            # Get cache length using compatibility helper
+            cache_len = get_cache_length(past_key_values)
 
             # Check compression trigger
             if cache_len >= compress_threshold:
-                # Apply compression - handle DynamicCache
-                if hasattr(past_key_values, 'key_cache'):
-                    # DynamicCache format
-                    new_key_cache = []
-                    new_value_cache = []
+                # Apply compression using compatibility function
+                new_len = get_cache_length(past_key_values)
 
-                    for layer_idx in range(len(past_key_values.key_cache)):
-                        k = past_key_values.key_cache[layer_idx]
-                        v = past_key_values.value_cache[layer_idx]
+                compress_dynamic_cache(past_key_values, baseline, cache_len - 1, log=False)
 
-                        try:
-                            # Use baseline compress - it will reduce size based on its config
-                            ck, cv = baseline.compress(k, v, None, cache_len - 1)
+                new_len_after = get_cache_length(past_key_values)
 
-                            # Only apply if compression happened
-                            if ck.shape[2] < k.shape[2]:
-                                new_key_cache.append(ck)
-                                new_value_cache.append(cv)
-                            else:
-                                new_key_cache.append(k)
-                                new_value_cache.append(v)
-                        except Exception as e:
-                            print(f"    Layer {layer_idx} compress failed: {e}")
-                            new_key_cache.append(k)
-                            new_value_cache.append(v)
-
-                    # Update DynamicCache
-                    past_key_values.key_cache = new_key_cache
-                    past_key_values.value_cache = new_value_cache
-                    new_len = new_key_cache[0].shape[2]
-
-                    if new_len < cache_len:
-                        compressions_applied += 1
-                        print(f"    Compression #{compressions_applied}: {cache_len} -> {new_len} tokens ({new_len/cache_len:.1%})")
-
-                elif isinstance(past_key_values, tuple):
-                    # Tuple format
-                    new_cache = []
-                    for layer_idx, (k, v) in enumerate(past_key_values):
-                        try:
-                            ck, cv = baseline.compress(k, v, None, cache_len - 1)
-                            if ck.shape[2] < k.shape[2]:
-                                new_cache.append((ck, cv))
-                            else:
-                                new_cache.append((k, v))
-                        except Exception as e:
-                            new_cache.append((k, v))
-
-                    past_key_values = tuple(new_cache)
-                    new_len = new_cache[0][0].shape[2]
-
-                    if new_len < cache_len:
-                        compressions_applied += 1
-                        print(f"    Compression #{compressions_applied}: {cache_len} -> {new_len} tokens")
+                if new_len_after < cache_len:
+                    compressions_applied += 1
+                    print(f"    Compression #{compressions_applied}: {cache_len} -> {new_len_after} tokens ({new_len_after/cache_len:.1%})")
 
             # Next token
             next_token = outputs.logits[:, -1, :].argmax(dim=-1, keepdim=True)
@@ -282,16 +209,7 @@ def test_with_compression(
     stats = baseline.get_stats()
 
     # Calculate final cache length
-    if hasattr(past_key_values, 'get_seq_length'):
-        final_cache_len = past_key_values.get_seq_length()
-    elif past_key_values is not None:
-        if hasattr(past_key_values, 'key_cache'):
-            final_cache_len = past_key_values.key_cache[0].shape[2]
-        else:
-            final_cache_len = past_key_values[0][0].shape[2]
-    else:
-        final_cache_len = input_length + max_new_tokens
-
+    final_cache_len = get_cache_length(past_key_values)
     compression_ratio = final_cache_len / (input_length + max_new_tokens)
 
     return LongContextResult(
