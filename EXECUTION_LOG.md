@@ -1397,3 +1397,94 @@ StreamingLLM         807       30       98     11.71%        349.4       1.23
 - Week 3: Oracle attribution & imitation learning integration
 - Week 4: RL training loop
 - Week 5-6: Full evaluation & comparison
+
+---
+
+### Step 8.5: Oracle Trace Generation with Real Attention
+
+**Goal:** Generate oracle traces using real model attention weights for imitation learning training.
+
+**Script created:** `scripts/generate_oracle_traces.py`
+
+**Key implementation details:**
+- Use `attn_implementation='eager'` (SDPA doesn't support `output_attentions=True`)
+- Set `output_attentions=True` in model forward pass
+- Capture attention weights from `outputs.attentions`
+- Compute importance scores using OracleAttribution
+- Generate action labels (KEEP_FP16, COMPRESS_INT4, OFFLOAD_DRAM, EVICT)
+
+**Test executed:**
+```bash
+python scripts/generate_oracle_traces.py --num-traces 2 --max-tokens 15
+```
+
+**Result:**
+```
+Generated 2 oracle traces
+Saved to: data/oracle_traces.json (21MB)
+```
+
+**Trace structure:**
+```json
+{
+  "prompt": "...",
+  "prompt_length": 81,
+  "num_steps": 16,
+  "steps": [
+    {
+      "phase": "prefill",
+      "importances": [[layer_importance_scores]],
+      "labels": [[layer_action_labels]],
+      "features": [[layer_features]]
+    },
+    {
+      "phase": "decode",
+      "step": 0,
+      "current_position": 81,
+      ...
+    }
+  ]
+}
+```
+
+---
+
+### Week 2 Day 5 Final Summary
+
+### ✅ Completed:
+1. DynamicCache API investigation (transformers 5.8)
+2. Compatibility helpers for KV cache access/modification
+3. Real KV cache compression working with model inference
+4. H2O baseline fixed for one-shot compression
+5. Long context test with actual generation
+6. Oracle trace generation with real attention weights
+
+### Compression Results Summary:
+| Method | Input 411 tokens | Input 807 tokens |
+|--------|------------------|------------------|
+| StreamingLLM | 68 (16.5%) | 68 (8.4%) |
+| H2O | 82-102 (20%) | 160-200 (20%) |
+| KIVI | 411 (100%*) | 807 (100%*) |
+
+*KIVI quantizes to 4-bit but keeps same token count
+
+### Files Modified/Created:
+| File | Description |
+|------|-------------|
+| baselines/unified_interface.py | DynamicCache compatibility helpers |
+| scripts/test_direct_compress.py | Updated for transformers 5.8 |
+| scripts/test_long_context.py | Updated for transformers 5.8 |
+| scripts/generate_oracle_traces.py | Real attention weight capture |
+| neurokv/policy/network.py | Added extract_from_attention method |
+| data/oracle_traces.json | Generated oracle traces |
+
+### Commits:
+- d75376b: Day 4 KV Cache Hook and compression testing
+- 934d619: Day 5 DynamicCache API fix, real compression
+- 3e233a1: Oracle trace generation with real attention
+
+### Next: Week 3 (May 15-17)
+- Train policy network on real oracle traces
+- Implement RL training loop (optional)
+- Full evaluation with LongBench
+
