@@ -206,6 +206,33 @@ class PolicyFeatures:
 
         return features
 
+    @staticmethod
+    def extract_from_attention(
+        attention_weights: torch.Tensor,
+        current_position: int,
+        layer_id: int,
+        importance_scores: torch.Tensor = None,
+    ) -> torch.Tensor:
+        """
+        Wrapper for extract_features that uses importance scores as history.
+
+        Args:
+            attention_weights: (batch, heads, 1, seq_len)
+            current_position: int
+            layer_id: int
+            importance_scores: (batch, seq_len) - accumulated importance
+
+        Returns:
+            features: (batch, seq_len, FEATURE_DIM)
+        """
+        return PolicyFeatures.extract_features(
+            attention_weights,
+            current_position,
+            layer_id,
+            history_window=32,
+            attention_history=importance_scores,
+        )
+
 
 class PolicyNetworkSmall(PolicyNetwork):
     """
