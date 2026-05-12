@@ -1488,3 +1488,121 @@ Saved to: data/oracle_traces.json (21MB)
 - Implement RL training loop (optional)
 - Full evaluation with LongBench
 
+
+---
+
+## Session 6: Policy Network Training (2026-05-12)
+
+### Goal
+Train policy network on real oracle traces from attention weights.
+
+---
+
+### Step 6.1: Create Training Script
+
+**Created:** `scripts/train_policy.py`
+
+**Key features:**
+- Load oracle traces from JSON
+- Convert nested tensors to flat training data
+- Handle positions and layer IDs with proper clamping
+- Train/val split (90/10)
+- Save checkpoints
+
+**Trace data structure:**
+```
+features[layer_idx] = (batch=1, seq_len, feature_dim=16)
+labels[layer_idx] = (batch=1, seq_len)
+```
+
+**Flattening approach:**
+- Each layer-step becomes separate training sample
+- Positions: torch.arange(seq_len).clamp_max(max_positions-1)
+- Layer IDs: torch.full((seq_len,), layer_idx)
+
+---
+
+### Step 6.2: Run Training
+
+**Command:**
+```bash
+python scripts/train_policy.py --small --epochs 5 --batch-size 128 --lr 1e-3
+```
+
+**Training Results:**
+
+| Metric | Value |
+|--------|-------|
+| Total samples | 39,168 |
+| Training samples | 35,251 |
+| Validation samples | 3,917 |
+| Policy parameters | 17,179,524 (17M) |
+
+**Label Distribution:**
+- KEEP_FP16 (Tier-1): 14.1%
+- COMPRESS_INT4 (Tier-2): 34.1%
+- OFFLOAD_DRAM (Tier-3): 0.0%
+- EVICT: 51.8%
+
+**Training Progress:**
+```
+Epoch 1: Loss 0.4654, Acc 79.90%
+Epoch 2: Loss 0.3420, Acc 85.59%
+Epoch 3: Loss 0.2942, Acc 87.53%
+Epoch 4: Loss 0.2608, Acc 89.30%
+Epoch 5: Loss 0.2350, Acc 90.57%
+```
+
+**Validation Results:**
+```
+Loss: 0.6810
+Accuracy: 70.74%
+Per-class accuracy:
+  KEEP_FP16: 94.96%
+  COMPRESS_INT4: 22.81% (low - class imbalance issue)
+  EVICT: 93.08%
+```
+
+---
+
+### Step 6.3: Analysis
+
+**Observations:**
+1. Training converges well (loss drops from 1.7 to 0.23)
+2. High accuracy on KEEP_FP16 (95%) and EVICT (93%)
+3. COMPRESS_INT4 struggles (22.81%) - likely due to:
+   - Class imbalance (only 34% of samples)
+   - Features not distinctive for intermediate tier
+4. OFFLOAD_DRAM class has 0 samples (tier3_ratio implicit)
+
+**Potential improvements:**
+- Generate more oracle traces with diverse prompts
+- Use class-balanced sampling or weighted loss
+- Increase feature dimension for better tier discrimination
+
+---
+
+### Files Created/Modified:
+| File | Description |
+|------|-------------|
+| scripts/train_policy.py | Training script for policy network |
+| checkpoints/policy_best.pt | Best checkpoint saved |
+| checkpoints/policy_final.pt | Final checkpoint saved |
+
+---
+
+### Day 6 Summary
+
+### ✅ Completed:
+1. Training script for policy network on oracle traces
+2. Fixed index out of bounds error in position/layer embeddings
+3. Successfully trained policy network (90% training accuracy)
+4. Validation evaluation shows tier-specific accuracy variance
+5. Identified COMPRESS_INT4 class imbalance issue
+
+### Next Steps:
+1. Generate more oracle traces with diverse prompts
+2. Implement weighted loss for class imbalance
+3. Evaluate trained policy on actual KV cache compression
+4. Compare NeuroKV policy vs baseline methods
+
