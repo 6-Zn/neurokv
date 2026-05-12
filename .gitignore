@@ -1,0 +1,77 @@
+# NeuroKV - Adaptive KV Cache Management
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyTorch
+*.pt
+*.pth
+*.bin
+checkpoints/
+*.ckpt
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data
+data/
+*.jsonl
+*.json
+
+# Logs
+*.log
+logs/
+
+# Environment
+.env
+.env.local
+.venv/
+venv/
+ENV/
+
+# Large files (not needed for repo)
+*.pdf
+*.pptx
+*.aux
+*.bbl
+*.blg
+*.out
+
+# Claude working files
+.claude/
+
+# Model weights (too large)
+models/
+*.safetensors
+*.gguf
