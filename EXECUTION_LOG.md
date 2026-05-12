@@ -1190,7 +1190,32 @@ git push origin main
 
 ---
 
-## 推送失败排查总结
+## Week 2 Day 4 (May 13): KV Cache Hook & Long Context Testing
+
+### Goal
+实现真实的KV cache集成，让baseline真正影响模型推理，测试长context效果。
+
+---
+
+### Step 7.1: Git推送检查
+
+**Instruction executed:**
+```bash
+git push origin main
+```
+
+**Result:** `Everything up-to-date` - Day 3已推送
+
+---
+
+### Step 7.2: 实现KV Cache Hook
+
+**Goal:** 创建attention hook，让baseline能修改模型的KV cache。
+
+**设计:**
+- Hook intercepts attention output
+- Baseline modifies past_key_values
+- Modified cache used in subsequent generation
 
 **原因分析:**
 - Day 1-2推送失败是临时网络波动
