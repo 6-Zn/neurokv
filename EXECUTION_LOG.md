@@ -1659,3 +1659,101 @@ COMPRESS_INT4 class is extremely difficult to predict. The model defaults to pre
 ⚠️ COMPRESS_INT4 prediction issue identified
 → Need to revisit oracle labeling or features
 
+
+---
+
+## Session 7: Binary Policy & Evaluation (2026-05-12)
+
+### Goal
+Simplify to binary classification and evaluate policy against baselines.
+
+---
+
+### Step 7.1: Binary Policy Training
+
+**Problem identified Day 6:** COMPRESS_INT4 class had 0.17% accuracy - features don't distinguish middle tier.
+
+**Solution:** Simplify to binary classification (KEEP vs EVICT).
+
+**Created:** `scripts/train_binary_policy.py`
+
+**Binary label generation:**
+- KEEP (0): Top 15% tokens by importance score
+- EVICT (1): Remaining 85% tokens
+
+**Training Results:**
+```
+Epoch 1: Loss 0.1580, Acc 93.63%
+Epoch 10: Loss 0.0564, Acc 97.64%
+
+Validation:
+  Overall accuracy: 89.28%
+  KEEP accuracy: 82.07%
+  EVICT accuracy: 90.60%
+```
+
+**Comparison with 4-class (Day 6):**
+- 4-class validation: 54.75% overall, COMPRESS 0.17%
+- Binary validation: 89.28% overall, KEEP 82.07%, EVICT 90.60%
+
+**Binary model significantly outperforms 4-class!**
+
+---
+
+### Step 7.2: Policy Evaluation on KV Cache Compression
+
+**Created:** `scripts/evaluate_policy.py`
+
+**Key design decisions:**
+1. Always keep attention sink tokens (first 4)
+2. Always keep recent tokens (last 16+)
+3. Use policy for middle region decisions
+4. Minimum keep ratio enforced (15%)
+
+**Evaluation Results:**
+| Method | Input | Cache | Ratio | Time(ms) | PPL |
+|--------|-------|-------|-------|----------|-----|
+| NeuroKV-Policy | 411 | 91 | 20.63% | 1107.2 | 1.56 |
+| H2O | 411 | 112 | 25.40% | 370.4 | 2.51 |
+| StreamingLLM | 411 | 66 | 14.97% | 350.1 | 1.54 |
+
+**Generated Text Quality:**
+- NeuroKV-Policy: "The development of artificial intelligence has led to..." (coherent!)
+- H2O: Garbled/foreign characters
+- StreamingLLM: Repetitive "0 0 0 0..."
+
+**Key Findings:**
+1. NeuroKV-Policy achieves comparable compression to H2O (20% vs 25%)
+2. NeuroKV maintains low perplexity (1.56), matching StreamingLLM
+3. NeuroKV produces coherent text, unlike baselines
+4. Policy inference overhead makes it slower than baselines
+5. Trade-off: Quality vs Speed
+
+---
+
+### Files Created/Modified:
+| File | Description |
+|------|-------------|
+| scripts/train_binary_policy.py | Binary classification training |
+| scripts/evaluate_policy.py | Policy vs baseline evaluation |
+| checkpoints/binary_policy.pt | Trained binary policy |
+
+---
+
+### Day 7 Summary
+
+### ✅ Completed:
+1. Binary policy training (89% validation accuracy)
+2. Policy evaluation pipeline
+3. Policy achieves coherent generation with compression
+4. Outperforms H2O in quality (perplexity 1.56 vs 2.51)
+5. Comparable compression ratio to baselines
+
+### Key Achievement:
+**NeuroKV policy produces coherent output while H2O and StreamingLLM fail on this test case!**
+
+### Next Steps:
+- Optimize policy inference speed
+- Test on longer contexts
+- Evaluate on benchmark datasets (LongBench)
+
