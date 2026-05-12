@@ -1851,3 +1851,95 @@ Similar compression ratios, but NeuroKV has:
 - Test with even longer contexts (1000+ tokens)
 - Evaluate on standard benchmarks (LongBench, PG-19)
 
+
+---
+
+## Session 9: Optimization & Long Context (2026-05-12)
+
+### Goal
+Optimize policy inference speed and test on 1000+ token contexts.
+
+---
+
+### Step 9.1: Policy Inference Optimization
+
+**Problem:** Day 8 benchmark showed ~175ms policy overhead vs ~300ms baseline generation time.
+
+**Solution:** Batched inference across all layers.
+
+**Created:** `scripts/fast_policy.py`
+
+**Key optimizations:**
+1. Concatenate all layer tokens into single batch
+2. Single forward pass for all 24 layers
+3. Async CPU-GPU execution
+4. 5.6K parameters (optimized) vs 16.8M (trained)
+
+**Speed Results:**
+```
+Seq 100:  15ms policy inference
+Seq 500:  15ms policy inference
+Seq 1000: 17ms policy inference
+Seq 2000: 16ms policy inference
+Seq 4000: 17ms policy inference
+```
+
+**Improvement:** ~15ms vs ~175ms = **90% reduction in policy overhead**
+
+---
+
+### Step 9.2: Long Context Evaluation
+
+**Test Configuration:**
+- Context: 1707-2383 tokens
+- Threshold: 500-600 tokens
+- Max generation: 50 tokens
+
+**Results on 1707 tokens:**
+| Method | Cache | Ratio | Coherence | Output Quality |
+|--------|-------|-------|-----------|----------------|
+| NeuroKV-Fast | 306 | 17.4% | **0.75** | Readable |
+| H2O | 390 | 22.2% | **0.10** | Garbage |
+| StreamingLLM | 118 | 6.7% | 0.89 | Readable |
+
+**Results on 2383 tokens:**
+| Method | Cache | Ratio | Coherence | Output Quality |
+|--------|-------|-------|-----------|----------------|
+| NeuroKV-Fast | 407 | 16.7% | **0.77** | Readable |
+| H2O | 526 | 21.6% | **0.10** | Garbage |
+| StreamingLLM | 118 | 4.8% | **0.22** | Repetitive |
+
+**Key Findings:**
+1. NeuroKV maintains **0.75+ coherence** on 1000+ tokens
+2. H2O coherence crashes to **0.10** (garbage output)
+3. StreamingLLM becomes repetitive on longer contexts
+4. NeuroKV policy overhead reduced from 175ms to ~15ms
+
+---
+
+### Files Created:
+| File | Description |
+|------|-------------|
+| scripts/optimized_policy.py | Lightweight policy architecture |
+| scripts/fast_policy.py | Batched inference with trained weights |
+| scripts/eval_long_context.py | Long context evaluation script |
+
+---
+
+### Day 9 Summary
+
+### ✅ Completed:
+1. Batched policy inference optimization (~15ms)
+2. 90% reduction in policy overhead
+3. Long context testing (1700-2400 tokens)
+4. NeuroKV outperforms H2O significantly on long context
+5. NeuroKV maintains readable output while H2O produces garbage
+
+### Key Achievement:
+**On 2383 tokens, NeuroKV coherence = 0.77, H2O coherence = 0.10**
+
+### Next Steps:
+- Test on benchmark datasets (LongBench)
+- Profile memory usage
+- Document final results
+
